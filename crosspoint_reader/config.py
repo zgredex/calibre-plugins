@@ -25,6 +25,8 @@ PREFS.defaults['path'] = '/'
 PREFS.defaults['chunk_size'] = 2048
 PREFS.defaults['debug'] = False
 PREFS.defaults['fetch_metadata'] = False
+
+# Baseline JPEG conversion settings
 PREFS.defaults['convert_baseline_jpeg'] = True
 PREFS.defaults['jpeg_quality'] = 85
 
@@ -33,6 +35,8 @@ class CrossPointConfigWidget(QWidget):
     def __init__(self):
         super().__init__()
         layout = QFormLayout(self)
+
+        # Connection settings
         self.host = QLineEdit(self)
         self.port = QSpinBox(self)
         self.port.setRange(1, 65535)
@@ -56,10 +60,12 @@ class CrossPointConfigWidget(QWidget):
         layout.addRow('', self.debug)
         layout.addRow('', self.fetch_metadata)
 
+        # Separator before image conversion section
         separator = QLabel('<hr>')
         separator.setStyleSheet('margin: 10px 0;')
         layout.addRow(separator)
 
+        # Image conversion settings
         image_label = QLabel('<b>Image Conversion</b>')
         layout.addRow(image_label)
 
@@ -67,20 +73,22 @@ class CrossPointConfigWidget(QWidget):
         self.convert_baseline_jpeg.setChecked(PREFS['convert_baseline_jpeg'])
         self.convert_baseline_jpeg.setToolTip(
             'Converts all PNG, GIF, WebP images in EPUBs to baseline (non-progressive) JPEG.\n'
-            'This improves compatibility with e-readers and reduces file size.'
+            'This improves compatibility with e-readers and can reduce file size.'
         )
         layout.addRow('', self.convert_baseline_jpeg)
 
         self.jpeg_quality = QSpinBox(self)
         self.jpeg_quality.setRange(1, 100)
         self.jpeg_quality.setValue(PREFS['jpeg_quality'])
-        self.jpeg_quality.setToolTip('JPEG quality (1-100). Higher = better quality, larger file size.')
+        self.jpeg_quality.setToolTip('JPEG quality (1-100). Higher means better quality but larger file size.')
         layout.addRow('JPEG quality', self.jpeg_quality)
 
+        # Separator before log section
         separator2 = QLabel('<hr>')
         separator2.setStyleSheet('margin: 10px 0;')
         layout.addRow(separator2)
 
+        # Log viewer
         self.log_view = QPlainTextEdit(self)
         self.log_view.setReadOnly(True)
         self.log_view.setPlaceholderText('Discovery log will appear here when debug is enabled.')

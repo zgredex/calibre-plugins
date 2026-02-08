@@ -19,9 +19,10 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     gui_name = 'CrossPoint Reader'
     description = 'CrossPoint Reader wireless device with baseline JPEG conversion'
     supported_platforms = ['windows', 'osx', 'linux']
-    author = 'Megabit'
+    author = 'CrossPoint Reader, Megabit'
     version = (0, 2, 0)
 
+    # Invalid USB vendor info to avoid USB scans matching.
     VENDOR_ID = [0xFFFF]
     PRODUCT_ID = [0xFFFF]
     BCD = [0xFFFF]
@@ -32,7 +33,9 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     MUST_READ_METADATA = False
     MANAGES_DEVICE_PRESENCE = True
     DEVICE_PLUGBOARD_NAME = 'CROSSPOINT_READER'
+    MUST_READ_METADATA = False
     SUPPORTS_DEVICE_DB = False
+    # Disable Calibre's device cache so we always refresh from device.
     device_is_usb_mass_storage = False
 
     def __init__(self, path):
@@ -52,8 +55,13 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
             except Exception:
                 pass
 
+    # -------------------------------------------------------------------------
+    # Device discovery / presence
+    # -------------------------------------------------------------------------
+
     def _discover(self):
         now = time.time()
+        # Don't spam discovery requests - wait at least 2 seconds between attempts
         if now - self.last_discovery < 2.0:
             return None, None
         self.last_discovery = now
@@ -109,6 +117,10 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         else:
             self.report_progress = report_progress
 
+    # -------------------------------------------------------------------------
+    # HTTP helpers for talking to the device
+    # -------------------------------------------------------------------------
+
     def _http_base(self):
         host = self.device_host or PREFS['host']
         return f'http://{host}'
@@ -138,11 +150,19 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         except Exception as exc:
             raise ControlError(desc=f'HTTP request failed: {exc}')
 
+    # -------------------------------------------------------------------------
+    # Configuration
+    # -------------------------------------------------------------------------
+
     def config_widget(self):
         return CrossPointConfigWidget()
 
     def save_settings(self, config_widget):
         config_widget.save()
+
+    # -------------------------------------------------------------------------
+    # Book listing
+    # -------------------------------------------------------------------------
 
     def books(self, oncard=None, end_session=True):
         if oncard is not None:
@@ -178,6 +198,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         return books
 
     def sync_booklists(self, booklists, end_session=True):
+        # No on-device metadata sync supported.
         return None
 
     def card_prefix(self, end_session=True):
@@ -189,12 +210,27 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
     def free_space(self, end_session=True):
         return 10 * 1024 * 1024 * 1024, 0, 0
 
+    # -------------------------------------------------------------------------
+    # Baseline JPEG conversion
+    # -------------------------------------------------------------------------
+
     def _convert_epub_to_baseline(self, filepath):
+        """
+        Convert all images in an EPUB to baseline JPEG format.
+        
+        Creates a temporary copy of the EPUB, converts it, and returns
+        the path to the converted file. The caller is responsible for
+        cleaning up the temp file afterward.
+        
+        If conversion fails, just returns the original filepath so
+        we can still upload the unconverted book.
+        """
         from calibre.ptempfile import PersistentTemporaryFile
         from .baseline_jpeg import convert_epub_images
 
         quality = PREFS.get('jpeg_quality', 85)
 
+        # Create a temp file for the converted EPUB
         temp_file = PersistentTemporaryFile(suffix='.epub')
         temp_path = temp_file.name
         temp_file.close()
@@ -215,9 +251,14 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
 
         except Exception as exc:
             self._log(f'[CrossPoint] Baseline conversion failed: {exc}')
+            # Clean up and return original path so upload can continue
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             return filepath
+
+    # -------------------------------------------------------------------------
+    # Upload
+    # -------------------------------------------------------------------------
 
     def upload_books(self, files, names, on_card=None, end_session=True, metadata=None):
         host = self.device_host or PREFS['host']
@@ -232,7 +273,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
 
         paths = []
         total = len(files)
-        temp_files = []
+        temp_files = []  # Keep track of temp files for cleanup
 
         try:
             for i, (infile, name) in enumerate(zip(files, names)):
@@ -243,6 +284,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                 else:
                     filepath = infile
 
+                # Convert to baseline JPEG if enabled
                 if convert_baseline and filepath.lower().endswith('.epub'):
                     self.report_progress(i / float(total), f'Converting images in {os.path.basename(name)}...')
                     converted_path = self._convert_epub_to_baseline(filepath)
@@ -280,6 +322,7 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
                 paths.append((lpath, os.path.getsize(filepath)))
 
         finally:
+            # Clean up any temp files we created
             for temp_path in temp_files:
                 try:
                     if os.path.exists(temp_path):
@@ -291,7 +334,22 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         return paths
 
     def add_books_to_metadata(self, locations, metadata, booklists):
+        metadata = iter(metadata)
+        for location in locations:
+            info = next(metadata)
+            lpath = location[0]
+            length = location[1]
+            book = Book('', lpath, size=length, other=info)
+            if booklists:
+                booklists[0].add_book(book, replace_metadata=True)
+
+    def add_books_to_metadata(self, locations, metadata, booklists):
+        # No on-device catalog to update yet.
         return
+
+    # -------------------------------------------------------------------------
+    # Delete
+    # -------------------------------------------------------------------------
 
     def delete_books(self, paths, end_session=True):
         for path in paths:
@@ -366,6 +424,10 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         if removed:
             self._log(f'[CrossPoint] removed {removed} items from device list')
 
+    # -------------------------------------------------------------------------
+    # Download
+    # -------------------------------------------------------------------------
+
     def get_file(self, path, outfile, end_session=True, this_book=None, total_books=None):
         url = self._http_base() + '/download'
         params = urllib.parse.urlencode({'path': path})
@@ -386,6 +448,10 @@ class CrossPointDevice(DeviceConfig, DevicePlugin):
         tf.flush()
         tf.seek(0)
         return tf
+
+    # -------------------------------------------------------------------------
+    # Lifecycle
+    # -------------------------------------------------------------------------
 
     def eject(self):
         self.is_connected = False
